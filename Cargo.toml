@@ -9,3 +9,4 @@ authors = [ "Mike Dilger <mike@mikedilger.com>" ]
 [dependencies]
 mosaic-core = { git = "https://github.com/mikedilger/mosaic-core", branch = "master" }
 mosaic-net = { git = "https://github.com/mikedilger/mosaic-net", branch = "master" }
+tokio = { version = "1", features = [ "full" ] }
