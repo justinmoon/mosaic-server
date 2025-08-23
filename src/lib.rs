@@ -5,16 +5,22 @@
 mod error;
 pub use error::{Error, InnerError};
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
+use mosaic_core::SecretKey;
+use mosaic_net::Server as QuicServer;
 use mosaic_net::ServerConfig as QuicServerConfig;
 use mosaic_net::{Approver, IncomingClient};
 
 /// A configuration for creating a Mosaic `Server`
 #[derive(Debug, Clone)]
 pub struct ServerConfig<A: Approver> {
-    /// Quic Server Config
-    pub quic_server_config: QuicServerConfig,
+    /// Mosaic ed25519 secret key for the server
+    pub secret_key: SecretKey,
+
+    /// Socket address to bind to
+    pub socket_addr: SocketAddr,
 
     /// IP Address approval
     pub approver: A,
@@ -32,11 +38,14 @@ pub struct Server<A: Approver> {
 impl<A: Approver + 'static> Server<A> {
     /// Create a new Mosaic server
     pub fn new(config: ServerConfig<A>) -> Result<Arc<Server<A>>, Error> {
-        let quic_server = config.quic_server_config.server()?;
+        let quic_server = {
+            let quic_server_config = QuicServerConfig::new(config.secret_key, config.socket_addr)?;
+            QuicServer::new(quic_server_config)?
+        };
 
         Ok(Arc::new(Server {
             quic_server: Arc::new(quic_server),
-            approver: Arc::new(config.approver.clone()),
+            approver: Arc::new(config.approver),
         }))
     }
 
