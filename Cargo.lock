@@ -186,7 +186,7 @@ dependencies = [
  "arrayvec",
  "cc",
  "cfg-if",
- "constant_time_eq",
+ "constant_time_eq 0.3.1",
 ]
 
 [[package]]
@@ -299,6 +299,12 @@ name = "constant_time_eq"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c74b8349d32d297c9134b8c88677813a227df8f779daa29bfc29c183fe3dca6"
+
+[[package]]
+name = "constant_time_eq"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
 
 [[package]]
 name = "core-foundation"
@@ -487,9 +493,9 @@ dependencies = [
 
 [[package]]
 name = "ed25519-dalek"
-version = "2.1.1"
+version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a3daa8e81a3963a60642bcc1f90a670680bd4a77535faa384e9d1c79d620871"
+checksum = "70e796c081cee67dc755e1a36a0a172b897fab85fc3f6bc48307991f64e4eca9"
 dependencies = [
  "curve25519-dalek",
  "ed25519",
@@ -527,7 +533,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27cea6e7f512d43b098939ff4d5a5d6fe3db07971e1d05176fe26c642d33f5b8"
 dependencies = [
  "getrandom 0.3.3",
- "rand 0.9.1",
+ "rand",
  "siphasher",
  "wide",
 ]
@@ -964,10 +970,11 @@ dependencies = [
 [[package]]
 name = "mosaic-core"
 version = "0.1.0"
-source = "git+https://github.com/mikedilger/mosaic-core?branch=master#ff5f284ebc6bacd42734dbebcba73235a45daa1d"
+source = "git+https://github.com/mikedilger/mosaic-core?branch=master#b48677734c6373922a08927809fa6fae7b940fe2"
 dependencies = [
  "bitflags",
  "blake3",
+ "constant_time_eq 0.4.2",
  "digest",
  "ed25519-dalek",
  "futures",
@@ -975,15 +982,15 @@ dependencies = [
  "http",
  "instant",
  "mainline",
- "rand 0.8.5",
- "rand_core 0.6.4",
+ "rand",
+ "scrypt",
  "z32",
 ]
 
 [[package]]
 name = "mosaic-net"
 version = "0.1.0"
-source = "git+https://github.com/mikedilger/mosaic-net?branch=master#8d22a3f68c5dfda06d4775848199e8b8d4eafdec"
+source = "git+https://github.com/mikedilger/mosaic-net?branch=master#da1bb687352b600dee673a3a1a4d6681506b86f2"
 dependencies = [
  "alt-tls",
  "mosaic-core",
@@ -1125,10 +1132,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "password-hash"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "346f04948ba92c43e8469c1ee6736c7563d71012b17d40745260fe106aac2166"
+dependencies = [
+ "base64ct",
+ "rand_core 0.6.4",
+ "subtle",
+]
+
+[[package]]
 name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
+
+[[package]]
+name = "pbkdf2"
+version = "0.12.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8ed6a7761f76e3b9f92dfb0a60a6a6477c61024b775147ff0973a02653abaf2"
+dependencies = [
+ "digest",
+ "hmac",
+]
 
 [[package]]
 name = "pem"
@@ -1257,7 +1285,7 @@ dependencies = [
  "fastbloom",
  "getrandom 0.3.3",
  "lru-slab",
- "rand 0.9.1",
+ "rand",
  "ring",
  "rustc-hash",
  "rustls",
@@ -1298,17 +1326,6 @@ name = "r-efi"
 version = "5.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
-
-[[package]]
-name = "rand"
-version = "0.8.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34af8d1a0e25924bc5b7c43c079c942339d8f0a8b57c39049bef581b46327404"
-dependencies = [
- "libc",
- "rand_chacha 0.3.1",
- "rand_core 0.6.4",
-]
 
 [[package]]
 name = "rand"
@@ -1515,6 +1532,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "salsa20"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97a22f5af31f73a954c10289c93e8a50cc23d971e80ee446f1f6f7137a088213"
+dependencies = [
+ "cipher",
+]
+
+[[package]]
 name = "same-file"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1537,6 +1563,18 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
+name = "scrypt"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0516a385866c09368f0b5bcd1caff3366aace790fcd46e2bb032697bb172fd1f"
+dependencies = [
+ "password-hash",
+ "pbkdf2",
+ "salsa20",
+ "sha2",
+]
 
 [[package]]
 name = "sec1"

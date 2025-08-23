@@ -33,6 +33,9 @@ pub enum InnerError {
 
     /// Mosaic Net
     MosaicNet(mosaic_net::Error),
+
+    /// Tokio Join
+    TokioJoin(tokio::task::JoinError),
 }
 
 impl std::fmt::Display for InnerError {
@@ -41,6 +44,7 @@ impl std::fmt::Display for InnerError {
             InnerError::General(s) => write!(f, "General Error: {s}"),
             InnerError::MosaicCore(e) => write!(f, "Mosaic Core: {e}"),
             InnerError::MosaicNet(e) => write!(f, "Mosaic Net: {e}"),
+            InnerError::TokioJoin(e) => write!(f, "Tokio Join: {e}"),
         }
     }
 }
@@ -137,6 +141,16 @@ impl From<mosaic_net::Error> for Error {
     fn from(e: mosaic_net::Error) -> Self {
         Error {
             inner: InnerError::MosaicNet(e),
+            location: Location::caller(),
+        }
+    }
+}
+
+impl From<tokio::task::JoinError> for Error {
+    #[track_caller]
+    fn from(e: tokio::task::JoinError) -> Self {
+        Error {
+            inner: InnerError::TokioJoin(e),
             location: Location::caller(),
         }
     }
