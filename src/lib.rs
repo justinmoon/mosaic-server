@@ -8,10 +8,11 @@ pub use config::{Logger, ServerConfig};
 mod error;
 pub use error::{Error, InnerError};
 
-use std::net::SocketAddr;
+mod handler;
+use handler::handle_mosaic_message;
+
 use std::sync::Arc;
 
-use mosaic_core::{Message, PublicKey};
 use mosaic_net::Server as QuicServer;
 use mosaic_net::ServerConfig as QuicServerConfig;
 use mosaic_net::{Approver, IncomingClient};
@@ -173,12 +174,4 @@ async fn handle_quic_client<A: Approver, L: Logger>(
 
     // TBD
     connection.close(0, close_reason);
-}
-
-async fn handle_mosaic_message(
-    _message: Message,
-    _pubkey: Option<PublicKey>,
-    _remote: Option<SocketAddr>,
-) -> Result<Option<Message>, Error> {
-    Ok(Some(Message::new_unrecognized()))
 }
