@@ -1,4 +1,4 @@
-use mosaic_core::SecretKey;
+use mosaic_core::{PublicKey, SecretKey};
 use mosaic_net::{Approval, Approver};
 use mosaic_server::{Logger, Server, ServerConfig};
 use tokio::signal::unix::{SignalKind, signal};
@@ -16,8 +16,12 @@ impl Approver for Denier {
 pub struct Log;
 
 impl Logger for Log {
-    fn log_client_error(&self, e: mosaic_server::Error) {
-
+    fn log_client_error(
+        &self,
+        e: mosaic_server::Error,
+        socket_addr: SocketAddr,
+        pubkey: Option<PublicKey>,
+    ) {
         // Swallow some boring errors that clutter the log files:
         match e.inner {
             mosaic_server::InnerError::MosaicNet(ref n) => match &n.inner {
@@ -25,14 +29,18 @@ impl Logger for Log {
                 mosaic_net::InnerError::ConnectionError(qce) => match qce {
                     quinn::ConnectionError::ConnectionClosed(_) => return,
                     quinn::ConnectionError::ApplicationClosed(_) => return,
-                    _ => { },
+                    _ => {}
                 },
-                _ => { },
+                _ => {}
             },
-            _ => { },
+            _ => {}
         }
 
-        eprintln!("{e}");
+        if let Some(pk) = pubkey {
+            eprintln!("{socket_addr}: pk={pk}, {e}");
+        } else {
+            eprintln!("{socket_addr}: anonymous, {e}");
+        }
     }
 }
 

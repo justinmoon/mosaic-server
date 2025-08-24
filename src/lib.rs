@@ -2,43 +2,21 @@
 //!
 //! NOTE: You must use Tokio as the async runtime in your `main()`
 
+mod config;
+pub use config::{Logger, ServerConfig};
+
 mod error;
 pub use error::{Error, InnerError};
 
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use mosaic_core::{Message, PublicKey, SecretKey};
+use mosaic_core::{Message, PublicKey};
 use mosaic_net::Server as QuicServer;
 use mosaic_net::ServerConfig as QuicServerConfig;
 use mosaic_net::{Approver, IncomingClient};
 
 use tokio::sync::SetOnce;
-
-/// A trait for logging errors
-pub trait Logger: Send + Sync {
-    /// Log a client error
-    fn log_client_error(&self, e: Error);
-}
-
-/// A configuration for creating a Mosaic `Server`
-#[derive(Debug, Clone)]
-pub struct ServerConfig<A: Approver, L: Logger> {
-    /// Mosaic ed25519 secret key for the server
-    pub secret_key: SecretKey,
-
-    /// Socket address to bind to
-    pub socket_addr: SocketAddr,
-
-    /// IP Address approval
-    pub approver: A,
-
-    /// Logging of errors
-    pub logger: L,
-    //pub listen_over_quic: bool,
-    //pub listen_over_tcp: bool,
-    //pub listen_over_websockets: bool,
-}
 
 /// A Mosaic server
 pub struct Server<A: Approver, L: Logger> {
@@ -92,9 +70,7 @@ impl<A: Approver + 'static, L: Logger + 'static> Server<A, L> {
                             let approver2 = self.approver.clone();
                             let logger2 = self.logger.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = handle_quic_client(quic_client, approver2).await {
-                                    logger2.log_client_error(e);
-                                }
+                                handle_quic_client(quic_client, approver2, logger2).await;
                             });
                         },
                         Err(e) => {
@@ -130,9 +106,22 @@ impl<A: Approver + 'static, L: Logger + 'static> Server<A, L> {
     }
 }
 
-async fn handle_quic_client<A: Approver>(client: IncomingClient, approver: Arc<A>) -> Result<(), Error> {
-    // Accept the connection if approved
-    let connection: mosaic_net::ClientConnection = client.accept(&*approver).await?;
+async fn handle_quic_client<A: Approver, L: Logger>(
+    client: IncomingClient,
+    approver: Arc<A>,
+    logger: Arc<L>,
+) {
+    let remote_address = client.inner().remote_address();
+
+    let connection: mosaic_net::ClientConnection = match client.accept(&*approver).await {
+        Ok(c) => c,
+        Err(e) => {
+            logger.log_client_error(e.into(), remote_address, None);
+            return;
+        }
+    };
+
+    let peer = connection.peer();
 
     const NO_CHANNEL: &[u8] = b"No QUIC channel";
 
@@ -140,30 +129,50 @@ async fn handle_quic_client<A: Approver>(client: IncomingClient, approver: Arc<A
 
     loop {
         // Get the next channel from the client
-        let mut channel = connection.next_channel().await?;
+        let mut channel = match connection.next_channel().await {
+            Ok(c) => c,
+            Err(e) => {
+                logger.log_client_error(e.into(), remote_address, peer);
+                return;
+            }
+        };
 
         // Get the next message from the channel
-        match channel.recv().await? {
-            None => {
+        match channel.recv().await {
+            Ok(None) => {
                 close_reason = NO_CHANNEL;
                 break;
-            },
-            Some(message) => {
-                if let Some(response_message) = handle_mosaic_message(
+            }
+            Ok(Some(message)) => {
+                match handle_mosaic_message(
                     message,
                     connection.peer(),
                     Some(connection.remote_socket_addr()),
-                ).await? {
-                    channel.send(response_message).await?;
+                )
+                .await
+                {
+                    Ok(Some(response_message)) => {
+                        if let Err(e) = channel.send(response_message).await {
+                            logger.log_client_error(e.into(), remote_address, peer);
+                            return;
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        logger.log_client_error(e, remote_address, peer);
+                        return;
+                    }
                 }
+            }
+            Err(e) => {
+                logger.log_client_error(e.into(), remote_address, peer);
+                return;
             }
         }
     }
 
     // TBD
     connection.close(0, close_reason);
-
-    Ok(())
 }
 
 async fn handle_mosaic_message(
