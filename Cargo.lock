@@ -1000,8 +1000,8 @@ dependencies = [
 
 [[package]]
 name = "mosaic-net"
-version = "0.2.0"
-source = "git+https://github.com/mikedilger/mosaic-net?branch=master#41b2a735548d79be1331010c3dd564cb1ef173d5"
+version = "0.2.1"
+source = "git+https://github.com/mikedilger/mosaic-net?branch=master#5cacedc57a4898cfb3390b9ccba5ec22b7b10aef"
 dependencies = [
  "alt-tls",
  "mosaic-core",
