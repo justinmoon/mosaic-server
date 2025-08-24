@@ -15,9 +15,15 @@ use mosaic_net::{Approver, IncomingClient};
 
 use tokio::sync::SetOnce;
 
+/// A trait for logging errors
+pub trait Logger: Send + Sync {
+    /// Log a client error
+    fn log_client_error(&self, e: Error);
+}
+
 /// A configuration for creating a Mosaic `Server`
 #[derive(Debug, Clone)]
-pub struct ServerConfig<A: Approver> {
+pub struct ServerConfig<A: Approver, L: Logger> {
     /// Mosaic ed25519 secret key for the server
     pub secret_key: SecretKey,
 
@@ -26,16 +32,21 @@ pub struct ServerConfig<A: Approver> {
 
     /// IP Address approval
     pub approver: A,
+
+    /// Logging of errors
+    pub logger: L,
     //pub listen_over_quic: bool,
     //pub listen_over_tcp: bool,
     //pub listen_over_websockets: bool,
 }
 
 /// A Mosaic server
-pub struct Server<A: Approver> {
+pub struct Server<A: Approver, L: Logger> {
     quic_server: Arc<mosaic_net::Server>,
 
     approver: Arc<A>,
+
+    logger: Arc<L>,
 
     // Set when shutdown starts. Stores the exit value.
     shutting_down: Arc<SetOnce<u32>>,
@@ -44,17 +55,25 @@ pub struct Server<A: Approver> {
     shutdown_complete: Arc<SetOnce<()>>,
 }
 
-impl<A: Approver + 'static> Server<A> {
+impl<A: Approver + 'static, L: Logger + 'static> Server<A, L> {
     /// Create a new Mosaic server
-    pub fn new(config: ServerConfig<A>) -> Result<Arc<Server<A>>, Error> {
+    pub fn new(config: ServerConfig<A, L>) -> Result<Arc<Server<A, L>>, Error> {
+        let ServerConfig {
+            secret_key,
+            socket_addr,
+            approver,
+            logger,
+        } = config;
+
         let quic_server = {
-            let quic_server_config = QuicServerConfig::new(config.secret_key, config.socket_addr)?;
+            let quic_server_config = QuicServerConfig::new(secret_key, socket_addr)?;
             QuicServer::new(quic_server_config)?
         };
 
         Ok(Arc::new(Server {
             quic_server: Arc::new(quic_server),
-            approver: Arc::new(config.approver),
+            approver: Arc::new(approver),
+            logger: Arc::new(logger),
             shutting_down: Arc::new(SetOnce::new()),
             shutdown_complete: Arc::new(SetOnce::new()),
         }))
@@ -69,11 +88,12 @@ impl<A: Approver + 'static> Server<A> {
             tokio::select! {
                 v = self.quic_server.accept() => {
                     match v {
-                        Ok(incoming_client) => {
+                        Ok(client) => {
                             let approver2 = self.approver.clone();
+                            let logger2 = self.logger.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = handle_incoming_client(incoming_client, approver2).await {
-                                    eprintln!("{e}");
+                                if let Err(e) = handle_client(client, approver2).await {
+                                    logger2.log_client_error(e);
                                 }
                             });
                         },
@@ -110,11 +130,8 @@ impl<A: Approver + 'static> Server<A> {
     }
 }
 
-async fn handle_incoming_client<A: Approver>(
-    incoming_client: IncomingClient,
-    approver: Arc<A>,
-) -> Result<(), Error> {
-    let connection = incoming_client.accept(&*approver).await?;
+async fn handle_client<A: Approver>(client: IncomingClient, approver: Arc<A>) -> Result<(), Error> {
+    let connection = client.accept(&*approver).await?;
 
     // TBD
     connection.close(0, b"Not Implemented");
