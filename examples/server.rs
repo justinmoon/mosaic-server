@@ -1,6 +1,7 @@
 use mosaic_core::SecretKey;
 use mosaic_net::AlwaysAllowedApprover;
 use mosaic_server::{Server, ServerConfig};
+use tokio::signal::unix::{SignalKind, signal};
 
 use std::net::SocketAddr;
 
@@ -21,7 +22,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         approver,
     })?;
 
-    server.run().await?;
+    let mut interrupt_signal = signal(SignalKind::interrupt())?;
+    let mut quit_signal = signal(SignalKind::quit())?;
+
+    loop {
+        tokio::select! {
+            v = interrupt_signal.recv() => if v.is_some() {
+                eprintln!("SIGINT");
+                server.trigger_shut_down(0);
+            },
+            v = quit_signal.recv() => if v.is_some() {
+                eprintln!("SIGQUIT");
+                server.trigger_shut_down(0);
+            },
+            r = server.run() => {
+                if let Err(e) = r {
+                    eprintln!("{e}");
+                }
+                break;
+            }
+        }
+    }
+
+    server.wait_for_shut_down().await;
 
     Ok(())
 }
