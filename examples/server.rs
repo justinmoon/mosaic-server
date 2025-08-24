@@ -17,13 +17,22 @@ pub struct Log;
 
 impl Logger for Log {
     fn log_client_error(&self, e: mosaic_server::Error) {
+
+        // Swallow some boring errors that clutter the log files:
         match e.inner {
-            mosaic_server::InnerError::MosaicNet(ref n) => match n.inner {
-                mosaic_net::InnerError::StatelessRetryRequired => {} // swallow
-                _ => eprintln!("{e}"),
+            mosaic_server::InnerError::MosaicNet(ref n) => match &n.inner {
+                mosaic_net::InnerError::StatelessRetryRequired => return,
+                mosaic_net::InnerError::ConnectionError(qce) => match qce {
+                    quinn::ConnectionError::ConnectionClosed(_) => return,
+                    quinn::ConnectionError::ApplicationClosed(_) => return,
+                    _ => { },
+                },
+                _ => { },
             },
-            _ => eprintln!("{e}"),
+            _ => { },
         }
+
+        eprintln!("{e}");
     }
 }
 
