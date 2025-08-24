@@ -8,7 +8,7 @@ pub use error::{Error, InnerError};
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use mosaic_core::SecretKey;
+use mosaic_core::{Message, PublicKey, SecretKey};
 use mosaic_net::Server as QuicServer;
 use mosaic_net::ServerConfig as QuicServerConfig;
 use mosaic_net::{Approver, IncomingClient};
@@ -88,11 +88,11 @@ impl<A: Approver + 'static, L: Logger + 'static> Server<A, L> {
             tokio::select! {
                 v = self.quic_server.accept() => {
                     match v {
-                        Ok(client) => {
+                        Ok(quic_client) => {
                             let approver2 = self.approver.clone();
                             let logger2 = self.logger.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = handle_client(client, approver2).await {
+                                if let Err(e) = handle_quic_client(quic_client, approver2).await {
                                     logger2.log_client_error(e);
                                 }
                             });
@@ -130,11 +130,46 @@ impl<A: Approver + 'static, L: Logger + 'static> Server<A, L> {
     }
 }
 
-async fn handle_client<A: Approver>(client: IncomingClient, approver: Arc<A>) -> Result<(), Error> {
-    let connection = client.accept(&*approver).await?;
+async fn handle_quic_client<A: Approver>(client: IncomingClient, approver: Arc<A>) -> Result<(), Error> {
+    // Accept the connection if approved
+    let connection: mosaic_net::ClientConnection = client.accept(&*approver).await?;
+
+    const NO_CHANNEL: &[u8] = b"No QUIC channel";
+
+    let close_reason;
+
+    loop {
+        // Get the next channel from the client
+        let mut channel = connection.next_channel().await?;
+
+        // Get the next message from the channel
+        match channel.recv().await? {
+            None => {
+                close_reason = NO_CHANNEL;
+                break;
+            },
+            Some(message) => {
+                if let Some(response_message) = handle_mosaic_message(
+                    message,
+                    connection.peer(),
+                    Some(connection.remote_socket_addr()),
+                ).await? {
+                    channel.send(response_message).await?;
+                }
+            }
+        }
+    }
 
     // TBD
-    connection.close(0, b"Not Implemented");
+    connection.close(0, close_reason);
 
     Ok(())
+}
+
+async fn handle_mosaic_message(
+    _message: Message,
+    _pubkey: Option<PublicKey>,
+    _remote: Option<SocketAddr>,
+) -> Result<Option<Message>, Error> {
+    Ok(Some(Message::new_unrecognized()))
 }

@@ -9,7 +9,7 @@ pub struct Denier;
 
 impl Approver for Denier {
     fn is_client_allowed(&self, _: SocketAddr) -> Approval {
-        Approval::Refuse
+        Approval::Approve
     }
 }
 
