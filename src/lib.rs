@@ -7,6 +7,7 @@ pub use error::{Error, InnerError};
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use mosaic_core::SecretKey;
 use mosaic_net::Server as QuicServer;
@@ -33,6 +34,7 @@ pub struct ServerConfig<A: Approver> {
 pub struct Server<A: Approver> {
     quic_server: Arc<mosaic_net::Server>,
     approver: Arc<A>,
+    shutting_down: AtomicBool,
 }
 
 impl<A: Approver + 'static> Server<A> {
@@ -46,6 +48,7 @@ impl<A: Approver + 'static> Server<A> {
         Ok(Arc::new(Server {
             quic_server: Arc::new(quic_server),
             approver: Arc::new(config.approver),
+            shutting_down: AtomicBool::new(false),
         }))
     }
 
@@ -70,10 +73,13 @@ impl<A: Approver + 'static> Server<A> {
                         eprintln!("{e}");
                     }
                 });
+
+                if self.shutting_down.load(Ordering::Relaxed) {
+                    break;
+                }
             }
 
-            // Close down gracefully
-            // quick_server.close(0, "Shutting Down");
+            quic_server.close(0, b"Shutting Down");
         });
 
         // TBD: Start WebSocket Server
