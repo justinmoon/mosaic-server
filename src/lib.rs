@@ -2,6 +2,9 @@
 //!
 //! NOTE: You must use Tokio as the async runtime in your `main()`
 
+mod client;
+pub use client::ClientData;
+
 mod config;
 pub use config::{Logger, ServerConfig};
 
@@ -13,11 +16,13 @@ use handler::handle_mosaic_message;
 
 use std::sync::Arc;
 
+// use dashmap::DashMap;
+use tokio::sync::SetOnce;
+
 use mosaic_net::Server as QuicServer;
 use mosaic_net::ServerConfig as QuicServerConfig;
 use mosaic_net::{Approver, IncomingClient};
 
-use tokio::sync::SetOnce;
 
 /// A Mosaic server
 pub struct Server<A: Approver, L: Logger> {
@@ -26,6 +31,9 @@ pub struct Server<A: Approver, L: Logger> {
     approver: Arc<A>,
 
     logger: Arc<L>,
+
+    // Connected clients
+    // client_map: Arc<DashMap<SocketAddr, ClientData>>,
 
     // Set when shutdown starts. Stores the exit value.
     shutting_down: Arc<SetOnce<u32>>,
@@ -53,6 +61,7 @@ impl<A: Approver + 'static, L: Logger + 'static> Server<A, L> {
             quic_server: Arc::new(quic_server),
             approver: Arc::new(approver),
             logger: Arc::new(logger),
+            // client_map: Arc::new(DashMap::new()),
             shutting_down: Arc::new(SetOnce::new()),
             shutdown_complete: Arc::new(SetOnce::new()),
         }))
@@ -70,6 +79,7 @@ impl<A: Approver + 'static, L: Logger + 'static> Server<A, L> {
                         Ok(quic_client) => {
                             let approver2 = self.approver.clone();
                             let logger2 = self.logger.clone();
+                            // let client_map2 = self.client_map.clone();
                             tokio::spawn(async move {
                                 handle_quic_client(quic_client, approver2, logger2).await;
                             });
@@ -111,6 +121,7 @@ async fn handle_quic_client<A: Approver, L: Logger>(
     client: IncomingClient,
     approver: Arc<A>,
     logger: Arc<L>,
+    // client_map: Arc<DashMap<SocketAddr, ClientData>>,
 ) {
     let remote_address = client.inner().remote_address();
 
@@ -123,6 +134,13 @@ async fn handle_quic_client<A: Approver, L: Logger>(
     };
 
     let peer = connection.peer();
+
+    let mut client_data = ClientData {
+        remote_address,
+        peer,
+        mosaic_version: None,
+        applications: None,
+    };
 
     const NO_CHANNEL: &[u8] = b"No QUIC channel";
 
@@ -147,8 +165,7 @@ async fn handle_quic_client<A: Approver, L: Logger>(
             Ok(Some(message)) => {
                 match handle_mosaic_message(
                     message,
-                    connection.peer(),
-                    Some(connection.remote_socket_addr()),
+                    &mut client_data,
                 )
                 .await
                 {
