@@ -980,8 +980,8 @@ dependencies = [
 
 [[package]]
 name = "mosaic-core"
-version = "0.2.0"
-source = "git+https://github.com/mikedilger/mosaic-core?branch=master#9a0c5d6fb864712219d4089bd7a7a73677aeb5b5"
+version = "0.3.0"
+source = "git+https://github.com/mikedilger/mosaic-core?branch=master#dec0859463023768d2af013f358b1ed15d2206b9"
 dependencies = [
  "bitflags",
  "blake3",
@@ -1000,8 +1000,8 @@ dependencies = [
 
 [[package]]
 name = "mosaic-net"
-version = "0.2.1"
-source = "git+https://github.com/mikedilger/mosaic-net?branch=master#5cacedc57a4898cfb3390b9ccba5ec22b7b10aef"
+version = "0.3.0"
+source = "git+https://github.com/mikedilger/mosaic-net?branch=master#6cc1ccfc1f79554e2b1e766e917ac2a962ba1865"
 dependencies = [
  "alt-tls",
  "mosaic-core",
