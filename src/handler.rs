@@ -1,9 +1,9 @@
-use mosaic_core::{HelloErrorCode, Message, MessageType, ResultCode};
+use mosaic_core::{Message, MessageType, ResultCode};
 
 use crate::Error;
 use crate::client::ClientData;
 
-const SUPPORTED_MAJOR_VERSION: u16 = 0;
+const SUPPORTED_MAJOR_VERSION: u8 = 0;
 
 pub(crate) async fn handle_mosaic_message(
     message: Message,
@@ -41,33 +41,21 @@ fn handle_hello(message: Message, client_data: &mut ClientData) -> Result<Option
         Some(v) => v,
         None => {
             client_data.closing_result = Some(ResultCode::Invalid);
-            let ack = Message::new_hello_ack(
-                HelloErrorCode::UnexpectedHello,
-                SUPPORTED_MAJOR_VERSION,
-                &[],
-            )?;
+            let ack = Message::new_hello_ack(ResultCode::Invalid, SUPPORTED_MAJOR_VERSION, &[])?;
             return Ok(Some(ack));
         }
     };
 
     if client_version != SUPPORTED_MAJOR_VERSION {
         client_data.closing_result = Some(ResultCode::Invalid);
-        let ack = Message::new_hello_ack(
-            HelloErrorCode::IncompatibleMajorVersion,
-            SUPPORTED_MAJOR_VERSION,
-            &[],
-        )?;
+        let ack = Message::new_hello_ack(ResultCode::Invalid, SUPPORTED_MAJOR_VERSION, &[])?;
         return Ok(Some(ack));
     }
 
     let frame_len = message.len();
     if frame_len < 8 || ((frame_len - 8) % 4) != 0 {
         client_data.closing_result = Some(ResultCode::Invalid);
-        let ack = Message::new_hello_ack(
-            HelloErrorCode::UnexpectedHello,
-            SUPPORTED_MAJOR_VERSION,
-            &[],
-        )?;
+        let ack = Message::new_hello_ack(ResultCode::Invalid, SUPPORTED_MAJOR_VERSION, &[])?;
         return Ok(Some(ack));
     }
 
@@ -75,11 +63,7 @@ fn handle_hello(message: Message, client_data: &mut ClientData) -> Result<Option
         Some(apps) => apps,
         None => {
             client_data.closing_result = Some(ResultCode::Invalid);
-            let ack = Message::new_hello_ack(
-                HelloErrorCode::UnexpectedHello,
-                SUPPORTED_MAJOR_VERSION,
-                &[],
-            )?;
+            let ack = Message::new_hello_ack(ResultCode::Invalid, SUPPORTED_MAJOR_VERSION, &[])?;
             return Ok(Some(ack));
         }
     };
@@ -90,13 +74,9 @@ fn handle_hello(message: Message, client_data: &mut ClientData) -> Result<Option
         accepted_apps.shrink_to_fit();
     }
 
-    let ack = Message::new_hello_ack(
-        HelloErrorCode::NoError,
-        SUPPORTED_MAJOR_VERSION,
-        &accepted_apps,
-    )?;
+    let ack = Message::new_hello_ack(ResultCode::Success, SUPPORTED_MAJOR_VERSION, &accepted_apps)?;
 
-    client_data.mosaic_version = Some(SUPPORTED_MAJOR_VERSION);
+    client_data.mosaic_version = Some(u16::from(SUPPORTED_MAJOR_VERSION));
     client_data.applications = Some(accepted_apps);
     client_data.closing_result = None;
 
@@ -130,8 +110,11 @@ mod tests {
             .expect("response");
 
         assert_eq!(response.message_type(), MessageType::HelloAck);
-        assert_eq!(response.hello_error_code(), Some(HelloErrorCode::NoError));
-        assert_eq!(client.mosaic_version, Some(SUPPORTED_MAJOR_VERSION));
+        assert_eq!(response.result_code(), Some(ResultCode::Success));
+        assert_eq!(
+            client.mosaic_version,
+            Some(u16::from(SUPPORTED_MAJOR_VERSION))
+        );
         assert_eq!(client.applications, Some(vec![0]));
         assert!(client.closing_result.is_none());
     }
@@ -162,10 +145,7 @@ mod tests {
             .expect("response");
 
         assert_eq!(response.message_type(), MessageType::HelloAck);
-        assert_eq!(
-            response.hello_error_code(),
-            Some(HelloErrorCode::IncompatibleMajorVersion)
-        );
+        assert_eq!(response.result_code(), Some(ResultCode::Invalid));
         assert_eq!(client.closing_result, Some(ResultCode::Invalid));
         assert_eq!(client.mosaic_version, None);
     }
@@ -175,8 +155,8 @@ mod tests {
         let mut client = make_client();
         let hello = Message::new_hello(SUPPORTED_MAJOR_VERSION, &[0]).unwrap();
         let mut bytes = hello.as_bytes().to_vec();
-        // Corrupt the advertised length so it is no longer a multiple of 4 bytes.
-        bytes[1] = 9;
+        // Corrupt the advertised length (bytes 4..=7) so it is no longer a multiple of 4 bytes.
+        bytes[4] = 9;
         let malformed = unsafe { Message::from_bytes_unchecked(bytes) };
 
         let response = handle_mosaic_message(malformed, &mut client)
@@ -185,10 +165,7 @@ mod tests {
             .expect("response");
 
         assert_eq!(response.message_type(), MessageType::HelloAck);
-        assert_eq!(
-            response.hello_error_code(),
-            Some(HelloErrorCode::UnexpectedHello)
-        );
+        assert_eq!(response.result_code(), Some(ResultCode::Invalid));
         assert_eq!(client.closing_result, Some(ResultCode::Invalid));
         assert_eq!(client.mosaic_version, None);
         assert!(client.applications.is_none());
@@ -205,7 +182,7 @@ mod tests {
             .expect("response");
 
         assert_eq!(response.message_type(), MessageType::HelloAck);
-        assert_eq!(response.hello_error_code(), Some(HelloErrorCode::NoError));
+        assert_eq!(response.result_code(), Some(ResultCode::Success));
         assert_eq!(client.applications, Some(Vec::new()));
         assert!(client.closing_result.is_none());
     }

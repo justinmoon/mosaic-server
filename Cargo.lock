@@ -979,6 +979,36 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a282da65faaf38286cf3be983213fcf1d2e2a58700e808f83f4ea9a4804bc0"
 
 [[package]]
+name = "minicbor"
+version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4f182275033b808ede9427884caa8e05fa7db930801759524ca7925bd8aa7a82"
+dependencies = [
+ "minicbor-derive",
+]
+
+[[package]]
+name = "minicbor-derive"
+version = "0.18.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b17290c95158a760027059fe3f511970d6857e47ff5008f9e09bffe3d3e1c6af"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "minicbor-serde"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "546cc904f35809921fa57016a84c97e68d9d27c012e87b9dadc28c233705f783"
+dependencies = [
+ "minicbor",
+ "serde",
+]
+
+[[package]]
 name = "minimal-lexical"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1006,8 +1036,8 @@ dependencies = [
 
 [[package]]
 name = "mosaic-core"
-version = "0.4.14"
-source = "git+https://github.com/justinmoon/mosaic-core?branch=demo%2Fstep-1#e83ca409f53aebcf4733ea69cd113e7de46475b5"
+version = "0.6.99"
+source = "git+https://github.com/justinmoon/mosaic-core?branch=demo%2Fstep-1#c623df264debeaf75cb043d518048748e09de29c"
 dependencies = [
  "bitflags",
  "blake3",
@@ -1019,6 +1049,9 @@ dependencies = [
  "http",
  "instant",
  "mainline",
+ "minicbor",
+ "minicbor-derive",
+ "minicbor-serde",
  "rand",
  "scrypt",
  "z32",
