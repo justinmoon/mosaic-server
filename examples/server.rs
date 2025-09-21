@@ -1,9 +1,10 @@
 use mosaic_core::{PublicKey, SecretKey};
 use mosaic_net::{Approval, Approver};
-use mosaic_server::{Logger, Server, ServerConfig};
+use mosaic_server::{LmdbStore, Logger, Server, ServerConfig};
 use tokio::signal::unix::{SignalKind, signal};
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 pub struct Denier;
 
@@ -56,11 +57,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let denier = Denier;
     let logger = Log;
 
+    // Storage directory: default to ./mosaic-data, allow override via MOSAIC_DATA_DIR
+    let data_dir = std::env::var("MOSAIC_DATA_DIR").unwrap_or_else(|_| "./mosaic-data".to_string());
+    let store = Arc::new(LmdbStore::open(&data_dir, 4)?);
+
     let server = Server::new(ServerConfig {
         secret_key,
         socket_addr: server_socket,
         approver: denier,
         logger,
+        store,
     })?;
 
     let mut interrupt_signal = signal(SignalKind::interrupt())?;
