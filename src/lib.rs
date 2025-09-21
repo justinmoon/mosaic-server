@@ -19,10 +19,10 @@ use std::sync::Arc;
 // use dashmap::DashMap;
 use tokio::sync::SetOnce;
 
+use mosaic_core::Message;
 use mosaic_net::Server as QuicServer;
 use mosaic_net::ServerConfig as QuicServerConfig;
 use mosaic_net::{Approver, IncomingClient};
-
 
 /// A Mosaic server
 pub struct Server<A: Approver, L: Logger> {
@@ -140,6 +140,7 @@ async fn handle_quic_client<A: Approver, L: Logger>(
         peer,
         mosaic_version: None,
         applications: None,
+        closing_result: None,
     };
 
     const NO_CHANNEL: &[u8] = b"No QUIC channel";
@@ -162,26 +163,27 @@ async fn handle_quic_client<A: Approver, L: Logger>(
                 close_reason = NO_CHANNEL;
                 break;
             }
-            Ok(Some(message)) => {
-                match handle_mosaic_message(
-                    message,
-                    &mut client_data,
-                )
-                .await
-                {
-                    Ok(Some(response_message)) => {
-                        if let Err(e) = channel.send(response_message).await {
-                            logger.log_client_error(e.into(), remote_address, peer);
-                            return;
-                        }
+            Ok(Some(message)) => match handle_mosaic_message(message, &mut client_data).await {
+                Ok(Some(response_message)) => {
+                    if let Err(e) = channel.send(response_message).await {
+                        logger.log_client_error(e.into(), remote_address, peer);
+                        return;
                     }
-                    Ok(None) => {}
-                    Err(e) => {
-                        logger.log_client_error(e, remote_address, peer);
+                    if let Some(result_code) = client_data.closing_result.take() {
+                        let closing = Message::new_closing(result_code);
+                        if let Err(e) = channel.send(closing).await {
+                            logger.log_client_error(e.into(), remote_address, peer);
+                        }
+                        connection.close(result_code.to_u8().into(), b"closing");
                         return;
                     }
                 }
-            }
+                Ok(None) => {}
+                Err(e) => {
+                    logger.log_client_error(e, remote_address, peer);
+                    return;
+                }
+            },
             Err(e) => {
                 logger.log_client_error(e.into(), remote_address, peer);
                 return;
