@@ -19,3 +19,6 @@ tempfile = "3"
 [patch."https://github.com/mikedilger/mosaic-core"]
 # Use forked mosaic-core from justinmoon for this branch
 mosaic-core = { git = "https://github.com/justinmoon/mosaic-core", branch = "demo/step-2" }
+[patch."https://github.com/mikedilger/mosaic-net"]
+# Use remote fork of mosaic-net with Channel::recv length fix
+mosaic-net = { git = "https://github.com/justinmoon/mosaic-net", branch = "master" }
