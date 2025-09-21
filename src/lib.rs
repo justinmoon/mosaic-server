@@ -14,6 +14,9 @@ pub use error::{Error, InnerError};
 mod handler;
 use handler::handle_mosaic_message;
 
+mod validation;
+pub use validation::{SubmissionValidationError, validate_submission};
+
 use std::sync::Arc;
 
 // use dashmap::DashMap;
