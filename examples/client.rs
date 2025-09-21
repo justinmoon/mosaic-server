@@ -43,10 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(message) = channel.recv().await? {
         match message.message_type() {
             MessageType::SubmissionResult => {
-                eprintln!(
-                    "Submission result: {:?}",
-                    message.submission_result_code().unwrap()
-                );
+                eprintln!("Submission result: {:?}", message.result_code().unwrap());
             }
             mt => {
                 eprintln!("Unexpected response: {mt:?}={message:?}");
