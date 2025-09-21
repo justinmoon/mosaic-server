@@ -15,5 +15,5 @@ tokio = { version = "1", features = [ "full" ] }
 [dev-dependencies]
 quinn = "0.11"
 [patch."https://github.com/mikedilger/mosaic-core"]
-# Use local checkout while iterating on Step 2
-mosaic-core = { path = "../mosaic-core" }
+# Use forked mosaic-core from justinmoon for this branch
+mosaic-core = { git = "https://github.com/justinmoon/mosaic-core", branch = "demo/step-2" }
