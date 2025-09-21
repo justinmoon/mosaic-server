@@ -51,7 +51,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         SecretKey::from_printable("mosec06ayb687prmw8abtuum9bps5hjmfz5ffyft3b4jeznn3htppf3kto")?;
     println!("SERVER PUBLIC KEY IS {}", secret_key.public());
 
-    let server_socket: SocketAddr = "127.0.0.1:8081".parse()?;
+    let server_addr =
+        std::env::var("MOSAIC_SERVER_ADDR").unwrap_or_else(|_| "127.0.0.1:8081".to_owned());
+    let server_socket: SocketAddr = server_addr.parse()?;
     println!("SERVER ENDPOINT IS {}", server_socket);
 
     let denier = Denier;

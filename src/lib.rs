@@ -12,7 +12,7 @@ mod error;
 pub use error::{Error, InnerError};
 
 mod handler;
-use handler::handle_mosaic_message;
+use handler::{handle_get, handle_mosaic_message};
 
 mod store;
 pub use store::{LmdbStore, PutResult, Store};
@@ -176,6 +176,44 @@ async fn handle_quic_client<A: Approver, L: Logger>(
                 break;
             }
             Ok(Some(message)) => {
+                if message.message_type() == MessageType::Get {
+                    match handle_get(&message, &client_data, &store) {
+                        Ok(get_response) => {
+                            for record in &get_response.records {
+                                let record_msg = match Message::new_record(
+                                    get_response.query_id,
+                                    record.as_ref(),
+                                ) {
+                                    Ok(msg) => msg,
+                                    Err(e) => {
+                                        logger.log_client_error(e.into(), remote_address, peer);
+                                        return;
+                                    }
+                                };
+                                if let Err(e) = channel.send(record_msg).await {
+                                    logger.log_client_error(e.into(), remote_address, peer);
+                                    return;
+                                }
+                            }
+
+                            let query_closed = Message::new_query_closed(
+                                get_response.query_id,
+                                get_response.result_code,
+                            );
+                            if let Err(e) = channel.send(query_closed).await {
+                                logger.log_client_error(e.into(), remote_address, peer);
+                                return;
+                            }
+                        }
+                        Err(e) => {
+                            logger.log_client_error(e, remote_address, peer);
+                            return;
+                        }
+                    }
+
+                    continue;
+                }
+
                 match handle_mosaic_message(message, &mut client_data, &store, &logger).await {
                     Ok(Some(response_message)) => {
                         let response_type = response_message.message_type();

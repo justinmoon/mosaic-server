@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use mosaic_core::{Record, Reference};
+use mosaic_core::{OwnedRecord, Record, Reference};
 use mosaic_store_lmdb::{InnerError as LmdbInnerError, Store as RawLmdbStore};
 
 use crate::{Error, InnerError};
@@ -19,6 +19,9 @@ pub trait Store: Send + Sync {
 
     /// Returns true if the record is already present (used for tests).
     fn has_record(&self, reference: &Reference) -> Result<bool, Error>;
+
+    /// Fetch a record by reference.
+    fn get_record(&self, reference: &Reference) -> Result<Option<OwnedRecord>, Error>;
 }
 
 /// LMDB-backed store adapter using `mosaic-store-lmdb`.
@@ -45,6 +48,17 @@ impl Store for LmdbStore {
 
     fn has_record(&self, reference: &Reference) -> Result<bool, Error> {
         self.0.has_record(*reference).map_err(convert_store_error)
+    }
+
+    fn get_record(&self, reference: &Reference) -> Result<Option<OwnedRecord>, Error> {
+        match self.0.get_record_by_ref(*reference) {
+            Ok(Some(record)) => {
+                let bytes = record.as_bytes().to_vec();
+                Ok(Some(OwnedRecord::from_vec(bytes)?))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(convert_store_error(e)),
+        }
     }
 }
 
@@ -103,5 +117,8 @@ mod tests {
 
         let reference = record.id().to_reference();
         assert!(store.has_record(&reference).unwrap());
+
+        let fetched = store.get_record(&reference).unwrap().unwrap();
+        assert_eq!(fetched.as_bytes(), record.as_bytes());
     }
 }

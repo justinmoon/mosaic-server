@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use mosaic_core::{Message, MessageType, Record, ResultCode};
+use mosaic_core::{Message, MessageType, OwnedRecord, QueryId, Record, ResultCode};
 
 use crate::{
     Error, InnerError, Logger, PutResult, Store, SubmissionValidationError, client::ClientData,
@@ -8,6 +8,57 @@ use crate::{
 };
 
 const SUPPORTED_MAJOR_VERSION: u8 = 0;
+
+pub(crate) struct GetResponse {
+    pub query_id: QueryId,
+    pub records: Vec<OwnedRecord>,
+    pub result_code: ResultCode,
+}
+
+pub(crate) fn handle_get(
+    message: &Message,
+    client_data: &ClientData,
+    store: &Arc<dyn Store>,
+) -> Result<GetResponse, Error> {
+    let Some(query_id) = message.query_id() else {
+        return Err(InnerError::General("GET message missing query id".to_owned()).into_err());
+    };
+
+    if client_data.mosaic_version.is_none() || client_data.applications.is_none() {
+        return Ok(GetResponse {
+            query_id,
+            records: Vec::new(),
+            result_code: ResultCode::Invalid,
+        });
+    }
+
+    let Some(references) = message.references() else {
+        return Ok(GetResponse {
+            query_id,
+            records: Vec::new(),
+            result_code: ResultCode::Invalid,
+        });
+    };
+
+    let mut found_records = Vec::with_capacity(references.len());
+    for reference in references {
+        if let Some(record) = store.get_record(&reference)? {
+            found_records.push(record);
+        }
+    }
+
+    let result_code = if found_records.is_empty() {
+        ResultCode::NotFound
+    } else {
+        ResultCode::Success
+    };
+
+    Ok(GetResponse {
+        query_id,
+        records: found_records,
+        result_code,
+    })
+}
 
 pub(crate) async fn handle_mosaic_message<L: Logger>(
     message: Message,
@@ -17,9 +68,7 @@ pub(crate) async fn handle_mosaic_message<L: Logger>(
 ) -> Result<Option<Message>, Error> {
     match message.message_type() {
         MessageType::Hello => handle_hello(message, client_data),
-        MessageType::Get => {
-            todo!()
-        }
+        MessageType::Get => Ok(None),
         MessageType::Query => {
             todo!()
         }
@@ -162,18 +211,18 @@ fn extract_record_id(message: &Message) -> Option<mosaic_core::Id> {
 mod tests {
     use super::*;
 
-    use std::collections::HashSet;
+    use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
     use crate::{Logger, Store};
     use mosaic_core::{
-        EMPTY_TAG_SET, Kind, OwnedRecord, RecordAddressData, RecordParts, RecordSigningData,
-        SecretKey, Timestamp,
+        EMPTY_TAG_SET, Kind, Message, MessageType, OwnedRecord, QueryId, RecordAddressData,
+        RecordParts, RecordSigningData, Reference, ResultCode, SecretKey, Timestamp,
     };
 
     #[derive(Default)]
     struct InMemoryStore {
-        records: Mutex<HashSet<[u8; 48]>>,
+        records: Mutex<HashMap<[u8; 48], OwnedRecord>>,
     }
 
     impl InMemoryStore {
@@ -182,7 +231,7 @@ mod tests {
         }
 
         fn contains(&self, id: &[u8; 48]) -> bool {
-            self.records.lock().unwrap().contains(id)
+            self.records.lock().unwrap().contains_key(id)
         }
     }
 
@@ -190,16 +239,26 @@ mod tests {
         fn put_record(&self, record: &mosaic_core::Record) -> Result<PutResult, Error> {
             let mut guard = self.records.lock().unwrap();
             let id_bytes = *record.id().as_bytes();
-            if guard.insert(id_bytes) {
-                Ok(PutResult::Inserted)
-            } else {
+            if guard.contains_key(&id_bytes) {
                 Ok(PutResult::Duplicate)
+            } else {
+                let owned = OwnedRecord::from_vec(record.as_bytes().to_vec())?;
+                guard.insert(id_bytes, owned);
+                Ok(PutResult::Inserted)
             }
         }
 
         fn has_record(&self, reference: &mosaic_core::Reference) -> Result<bool, Error> {
             let target = *reference.as_bytes();
-            Ok(self.records.lock().unwrap().contains(&target))
+            Ok(self.records.lock().unwrap().contains_key(&target))
+        }
+
+        fn get_record(
+            &self,
+            reference: &mosaic_core::Reference,
+        ) -> Result<Option<OwnedRecord>, Error> {
+            let target = *reference.as_bytes();
+            Ok(self.records.lock().unwrap().get(&target).cloned())
         }
     }
 
@@ -253,6 +312,13 @@ mod tests {
 
         fn has_record(&self, _reference: &mosaic_core::Reference) -> Result<bool, Error> {
             Ok(false)
+        }
+
+        fn get_record(
+            &self,
+            _reference: &mosaic_core::Reference,
+        ) -> Result<Option<OwnedRecord>, Error> {
+            Ok(None)
         }
     }
 
@@ -468,5 +534,60 @@ mod tests {
         assert_eq!(response.message_type(), MessageType::Closing);
         assert_eq!(response.result_code(), Some(ResultCode::Invalid));
         assert!(env.store_impl.record_count() == 0);
+    }
+
+    #[test]
+    fn get_requires_handshake() {
+        let env = TestEnv::new();
+        let record = build_record();
+        let reference = record.id().to_reference();
+        env.store_impl
+            .put_record(record.as_ref())
+            .expect("insert record");
+        let query_id = QueryId::from_bytes([0, 1]);
+        let get_message = Message::new_get(query_id, &[&reference]).unwrap();
+        let client = make_client();
+
+        let response = handle_get(&get_message, &client, &env.store).unwrap();
+        assert_eq!(response.result_code, ResultCode::Invalid);
+        assert!(response.records.is_empty());
+    }
+
+    #[test]
+    fn get_returns_records_and_success() {
+        let env = TestEnv::new();
+        let record = build_record();
+        let reference = record.id().to_reference();
+        env.store_impl
+            .put_record(record.as_ref())
+            .expect("insert record");
+        let query_id = QueryId::from_bytes([0, 2]);
+        let get_message = Message::new_get(query_id, &[&reference]).unwrap();
+
+        let mut client = make_client();
+        client.mosaic_version = Some(0);
+        client.applications = Some(vec![0]);
+
+        let response = handle_get(&get_message, &client, &env.store).unwrap();
+        assert_eq!(response.result_code, ResultCode::Success);
+        assert_eq!(response.records.len(), 1);
+        assert_eq!(response.records[0].as_bytes(), record.as_bytes());
+    }
+
+    #[test]
+    fn get_not_found_returns_notfound() {
+        let env = TestEnv::new();
+        let mut client = make_client();
+        client.mosaic_version = Some(0);
+        client.applications = Some(vec![0]);
+
+        let reference_bytes: [u8; 48] = [0; 48];
+        let reference = Reference::from_bytes(&reference_bytes).unwrap();
+        let query_id = QueryId::from_bytes([0, 3]);
+        let get_message = Message::new_get(query_id, &[&reference]).unwrap();
+
+        let response = handle_get(&get_message, &client, &env.store).unwrap();
+        assert_eq!(response.result_code, ResultCode::NotFound);
+        assert!(response.records.is_empty());
     }
 }
