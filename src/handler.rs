@@ -1,13 +1,19 @@
-use mosaic_core::{Message, MessageType, ResultCode};
+use std::sync::Arc;
 
-use crate::Error;
-use crate::client::ClientData;
+use mosaic_core::{Message, MessageType, Record, ResultCode};
+
+use crate::{
+    Error, InnerError, Logger, PutResult, Store, SubmissionValidationError, client::ClientData,
+    validate_submission,
+};
 
 const SUPPORTED_MAJOR_VERSION: u8 = 0;
 
-pub(crate) async fn handle_mosaic_message(
+pub(crate) async fn handle_mosaic_message<L: Logger>(
     message: Message,
     client_data: &mut ClientData,
+    store: &Arc<dyn Store>,
+    logger: &Arc<L>,
 ) -> Result<Option<Message>, Error> {
     match message.message_type() {
         MessageType::Hello => handle_hello(message, client_data),
@@ -24,7 +30,8 @@ pub(crate) async fn handle_mosaic_message(
             todo!()
         }
         MessageType::Submission => {
-            todo!()
+            let response = handle_submission(message, client_data, store, logger)?;
+            Ok(Some(response))
         }
         MessageType::Unrecognized => Ok(Some(Message::new_unrecognized())),
         _ => Ok(Some(Message::new_unrecognized())),
@@ -83,9 +90,171 @@ fn handle_hello(message: Message, client_data: &mut ClientData) -> Result<Option
     Ok(Some(ack))
 }
 
+fn handle_submission<L: Logger>(
+    message: Message,
+    client_data: &mut ClientData,
+    store: &Arc<dyn Store>,
+    logger: &Arc<L>,
+) -> Result<Message, Error> {
+    match validate_submission(&message, client_data) {
+        Ok(record) => {
+            let id = record.id();
+            match store.put_record(record.as_ref()) {
+                Ok(PutResult::Inserted) => {
+                    Ok(Message::new_submission_result(id, ResultCode::Accepted))
+                }
+                Ok(PutResult::Duplicate) => {
+                    Ok(Message::new_submission_result(id, ResultCode::Duplicate))
+                }
+                Err(store_err) => {
+                    logger.log_client_error(
+                        store_err,
+                        client_data.remote_address,
+                        client_data.peer,
+                    );
+                    Ok(Message::new_submission_result(id, ResultCode::GeneralError))
+                }
+            }
+        }
+        Err(validation_err) => {
+            log_validation_error(logger, client_data, &validation_err);
+            let result_code = validation_err.result_code();
+
+            if let Some(record_id) = extract_record_id(&message) {
+                Ok(Message::new_submission_result(record_id, result_code))
+            } else {
+                logger.log_client_error(
+                    InnerError::General("submission contained an unreadable record".to_owned())
+                        .into_err(),
+                    client_data.remote_address,
+                    client_data.peer,
+                );
+                Ok(Message::new_closing(ResultCode::Invalid))
+            }
+        }
+    }
+}
+
+fn log_validation_error<L: Logger>(
+    logger: &Arc<L>,
+    client_data: &ClientData,
+    validation_err: &SubmissionValidationError,
+) {
+    let message = format!("submission validation failed: {:?}", validation_err);
+    logger.log_client_error(
+        InnerError::General(message).into_err(),
+        client_data.remote_address,
+        client_data.peer,
+    );
+}
+
+fn extract_record_id(message: &Message) -> Option<mosaic_core::Id> {
+    if message.message_type() != MessageType::Submission {
+        return None;
+    }
+
+    Record::from_bytes(&message.as_bytes()[8..])
+        .ok()
+        .map(|record| record.id())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::collections::HashSet;
+    use std::sync::{Arc, Mutex};
+
+    use crate::{Logger, Store};
+    use mosaic_core::{
+        EMPTY_TAG_SET, Kind, OwnedRecord, RecordAddressData, RecordParts, RecordSigningData,
+        SecretKey, Timestamp,
+    };
+
+    #[derive(Default)]
+    struct InMemoryStore {
+        records: Mutex<HashSet<[u8; 48]>>,
+    }
+
+    impl InMemoryStore {
+        fn record_count(&self) -> usize {
+            self.records.lock().unwrap().len()
+        }
+
+        fn contains(&self, id: &[u8; 48]) -> bool {
+            self.records.lock().unwrap().contains(id)
+        }
+    }
+
+    impl Store for InMemoryStore {
+        fn put_record(&self, record: &mosaic_core::Record) -> Result<PutResult, Error> {
+            let mut guard = self.records.lock().unwrap();
+            let id_bytes = *record.id().as_bytes();
+            if guard.insert(id_bytes) {
+                Ok(PutResult::Inserted)
+            } else {
+                Ok(PutResult::Duplicate)
+            }
+        }
+
+        fn has_record(&self, reference: &mosaic_core::Reference) -> Result<bool, Error> {
+            let target = *reference.as_bytes();
+            Ok(self.records.lock().unwrap().contains(&target))
+        }
+    }
+
+    #[derive(Default)]
+    struct TestLogger {
+        entries: Mutex<Vec<String>>,
+    }
+
+    impl TestLogger {
+        fn entries(&self) -> Vec<String> {
+            self.entries.lock().unwrap().clone()
+        }
+    }
+
+    impl Logger for TestLogger {
+        fn log_client_error(
+            &self,
+            e: Error,
+            _socket_addr: std::net::SocketAddr,
+            _pubkey: Option<mosaic_core::PublicKey>,
+        ) {
+            self.entries.lock().unwrap().push(e.to_string());
+        }
+    }
+
+    struct TestEnv {
+        store_impl: Arc<InMemoryStore>,
+        store: Arc<dyn Store>,
+        logger: Arc<TestLogger>,
+    }
+
+    impl TestEnv {
+        fn new() -> Self {
+            let store_impl = Arc::new(InMemoryStore::default());
+            let store: Arc<dyn Store> = store_impl.clone();
+            let logger = Arc::new(TestLogger::default());
+            Self {
+                store_impl,
+                store,
+                logger,
+            }
+        }
+    }
+
+    struct FailingStore;
+
+    impl Store for FailingStore {
+        fn put_record(&self, _record: &mosaic_core::Record) -> Result<PutResult, Error> {
+            Err(InnerError::General("store failure".to_owned()).into_err())
+        }
+
+        fn has_record(&self, _reference: &mosaic_core::Reference) -> Result<bool, Error> {
+            Ok(false)
+        }
+    }
 
     fn make_client() -> ClientData {
         use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -99,12 +268,26 @@ mod tests {
         }
     }
 
+    fn build_record() -> OwnedRecord {
+        let signing_key = SecretKey::generate();
+        OwnedRecord::new(&RecordParts {
+            signing_data: RecordSigningData::SecretKey(signing_key.clone()),
+            address_data: RecordAddressData::Random(signing_key.public(), Kind::KEY_SCHEDULE),
+            timestamp: Timestamp::now().unwrap(),
+            flags: Default::default(),
+            tag_set: &EMPTY_TAG_SET,
+            payload: b"handler test payload",
+        })
+        .unwrap()
+    }
+
     #[tokio::test]
     async fn hello_success() {
         let mut client = make_client();
         let hello = Message::new_hello(SUPPORTED_MAJOR_VERSION, &[0]).unwrap();
+        let env = TestEnv::new();
 
-        let response = handle_mosaic_message(hello, &mut client)
+        let response = handle_mosaic_message(hello, &mut client, &env.store, &env.logger)
             .await
             .unwrap()
             .expect("response");
@@ -123,12 +306,15 @@ mod tests {
     async fn hello_repeated_returns_unexpected() {
         let mut client = make_client();
         let hello = Message::new_hello(SUPPORTED_MAJOR_VERSION, &[0]).unwrap();
+        let env = TestEnv::new();
 
-        let _ = handle_mosaic_message(hello.clone(), &mut client)
+        let _ = handle_mosaic_message(hello.clone(), &mut client, &env.store, &env.logger)
             .await
             .unwrap();
 
-        let response = handle_mosaic_message(hello, &mut client).await.unwrap();
+        let response = handle_mosaic_message(hello, &mut client, &env.store, &env.logger)
+            .await
+            .unwrap();
 
         assert!(response.is_none());
         assert!(client.closing_result.is_none());
@@ -138,8 +324,9 @@ mod tests {
     async fn hello_incompatible_version_requests_close() {
         let mut client = make_client();
         let hello = Message::new_hello(SUPPORTED_MAJOR_VERSION + 1, &[0]).unwrap();
+        let env = TestEnv::new();
 
-        let response = handle_mosaic_message(hello, &mut client)
+        let response = handle_mosaic_message(hello, &mut client, &env.store, &env.logger)
             .await
             .unwrap()
             .expect("response");
@@ -158,8 +345,9 @@ mod tests {
         // Corrupt the advertised length (bytes 4..=7) so it is no longer a multiple of 4 bytes.
         bytes[4] = 9;
         let malformed = unsafe { Message::from_bytes_unchecked(bytes) };
+        let env = TestEnv::new();
 
-        let response = handle_mosaic_message(malformed, &mut client)
+        let response = handle_mosaic_message(malformed, &mut client, &env.store, &env.logger)
             .await
             .unwrap()
             .expect("response");
@@ -175,8 +363,9 @@ mod tests {
     async fn hello_without_app_zero_acknowledges_none() {
         let mut client = make_client();
         let hello = Message::new_hello(SUPPORTED_MAJOR_VERSION, &[]).unwrap();
+        let env = TestEnv::new();
 
-        let response = handle_mosaic_message(hello, &mut client)
+        let response = handle_mosaic_message(hello, &mut client, &env.store, &env.logger)
             .await
             .unwrap()
             .expect("response");
@@ -185,5 +374,99 @@ mod tests {
         assert_eq!(response.result_code(), Some(ResultCode::Success));
         assert_eq!(client.applications, Some(Vec::new()));
         assert!(client.closing_result.is_none());
+    }
+
+    #[tokio::test]
+    async fn submission_before_handshake_is_invalid() {
+        let mut client = make_client();
+        let record = build_record();
+        let message = Message::new_submission(&record).unwrap();
+        let env = TestEnv::new();
+
+        let response = handle_mosaic_message(message, &mut client, &env.store, &env.logger)
+            .await
+            .unwrap()
+            .expect("response");
+
+        assert_eq!(response.message_type(), MessageType::SubmissionResult);
+        assert_eq!(response.result_code(), Some(ResultCode::Invalid));
+        assert_eq!(response.id_prefix().unwrap(), &record.id().as_bytes()[..32]);
+        assert_eq!(env.store_impl.record_count(), 0);
+        assert!(!env.logger.entries().is_empty());
+    }
+
+    #[tokio::test]
+    async fn submission_persists_and_acknowledges() {
+        let mut client = make_client();
+        client.mosaic_version = Some(0);
+        client.applications = Some(vec![0]);
+        let record = build_record();
+        let message = Message::new_submission(&record).unwrap();
+        let env = TestEnv::new();
+
+        let response = handle_mosaic_message(message.clone(), &mut client, &env.store, &env.logger)
+            .await
+            .unwrap()
+            .expect("response");
+
+        assert_eq!(response.message_type(), MessageType::SubmissionResult);
+        assert_eq!(response.result_code(), Some(ResultCode::Accepted));
+        assert!(env.store_impl.contains(record.id().as_bytes()));
+
+        let duplicate = handle_mosaic_message(message, &mut client, &env.store, &env.logger)
+            .await
+            .unwrap()
+            .expect("response");
+
+        assert_eq!(duplicate.result_code(), Some(ResultCode::Duplicate));
+        assert_eq!(env.store_impl.record_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn submission_store_error_surfaces_as_general_error() {
+        let mut client = make_client();
+        client.mosaic_version = Some(0);
+        client.applications = Some(vec![0]);
+        let record = build_record();
+        let message = Message::new_submission(&record).unwrap();
+        let store: Arc<dyn Store> = Arc::new(FailingStore);
+        let logger = Arc::new(TestLogger::default());
+
+        let response = handle_mosaic_message(message, &mut client, &store, &logger)
+            .await
+            .unwrap()
+            .expect("response");
+
+        assert_eq!(response.message_type(), MessageType::SubmissionResult);
+        assert_eq!(response.result_code(), Some(ResultCode::GeneralError));
+        assert_eq!(response.id_prefix().unwrap(), &record.id().as_bytes()[..32]);
+        assert_eq!(logger.entries().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn submission_with_unreadable_record_triggers_closing() {
+        let mut client = make_client();
+        client.mosaic_version = Some(0);
+        client.applications = Some(vec![0]);
+
+        let record = build_record();
+        let mut bytes = Message::new_submission(&record)
+            .unwrap()
+            .as_bytes()
+            .to_vec();
+        // Corrupt the embedded record payload to invalidate the signature/hash.
+        bytes[8] ^= 0xFF;
+        let corrupted = unsafe { Message::from_bytes_unchecked(bytes) };
+
+        let env = TestEnv::new();
+
+        let response = handle_mosaic_message(corrupted, &mut client, &env.store, &env.logger)
+            .await
+            .unwrap()
+            .expect("closing response");
+
+        assert_eq!(response.message_type(), MessageType::Closing);
+        assert_eq!(response.result_code(), Some(ResultCode::Invalid));
+        assert!(env.store_impl.record_count() == 0);
     }
 }

@@ -14,6 +14,9 @@ pub use error::{Error, InnerError};
 mod handler;
 use handler::handle_mosaic_message;
 
+mod store;
+pub use store::{LmdbStore, PutResult, Store};
+
 mod validation;
 pub use validation::{SubmissionValidationError, validate_submission};
 
@@ -22,7 +25,7 @@ use std::sync::Arc;
 // use dashmap::DashMap;
 use tokio::sync::SetOnce;
 
-use mosaic_core::Message;
+use mosaic_core::{Message, MessageType, ResultCode};
 use mosaic_net::Server as QuicServer;
 use mosaic_net::ServerConfig as QuicServerConfig;
 use mosaic_net::{Approver, IncomingClient};
@@ -34,6 +37,8 @@ pub struct Server<A: Approver, L: Logger> {
     approver: Arc<A>,
 
     logger: Arc<L>,
+
+    store: Arc<dyn Store>,
 
     // Connected clients
     // client_map: Arc<DashMap<SocketAddr, ClientData>>,
@@ -53,6 +58,7 @@ impl<A: Approver + 'static, L: Logger + 'static> Server<A, L> {
             socket_addr,
             approver,
             logger,
+            store,
         } = config;
 
         let quic_server = {
@@ -64,6 +70,7 @@ impl<A: Approver + 'static, L: Logger + 'static> Server<A, L> {
             quic_server: Arc::new(quic_server),
             approver: Arc::new(approver),
             logger: Arc::new(logger),
+            store,
             // client_map: Arc::new(DashMap::new()),
             shutting_down: Arc::new(SetOnce::new()),
             shutdown_complete: Arc::new(SetOnce::new()),
@@ -83,8 +90,9 @@ impl<A: Approver + 'static, L: Logger + 'static> Server<A, L> {
                             let approver2 = self.approver.clone();
                             let logger2 = self.logger.clone();
                             // let client_map2 = self.client_map.clone();
+                            let store2 = self.store.clone();
                             tokio::spawn(async move {
-                                handle_quic_client(quic_client, approver2, logger2).await;
+                                handle_quic_client(quic_client, approver2, logger2, store2).await;
                             });
                         },
                         Err(e) => {
@@ -124,6 +132,7 @@ async fn handle_quic_client<A: Approver, L: Logger>(
     client: IncomingClient,
     approver: Arc<A>,
     logger: Arc<L>,
+    store: Arc<dyn Store>,
     // client_map: Arc<DashMap<SocketAddr, ClientData>>,
 ) {
     let remote_address = client.inner().remote_address();
@@ -166,27 +175,37 @@ async fn handle_quic_client<A: Approver, L: Logger>(
                 close_reason = NO_CHANNEL;
                 break;
             }
-            Ok(Some(message)) => match handle_mosaic_message(message, &mut client_data).await {
-                Ok(Some(response_message)) => {
-                    if let Err(e) = channel.send(response_message).await {
-                        logger.log_client_error(e.into(), remote_address, peer);
-                        return;
-                    }
-                    if let Some(result_code) = client_data.closing_result.take() {
-                        let closing = Message::new_closing(result_code);
-                        if let Err(e) = channel.send(closing).await {
+            Ok(Some(message)) => {
+                match handle_mosaic_message(message, &mut client_data, &store, &logger).await {
+                    Ok(Some(response_message)) => {
+                        let response_type = response_message.message_type();
+                        let response_code = response_message.result_code();
+
+                        if let Err(e) = channel.send(response_message).await {
                             logger.log_client_error(e.into(), remote_address, peer);
+                            return;
                         }
-                        connection.close(result_code.to_u8().into(), b"closing");
+                        if response_type == MessageType::Closing {
+                            let code = response_code.unwrap_or(ResultCode::Invalid);
+                            connection.close(code.to_u8().into(), b"closing");
+                            return;
+                        }
+                        if let Some(result_code) = client_data.closing_result.take() {
+                            let closing = Message::new_closing(result_code);
+                            if let Err(e) = channel.send(closing).await {
+                                logger.log_client_error(e.into(), remote_address, peer);
+                            }
+                            connection.close(result_code.to_u8().into(), b"closing");
+                            return;
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        logger.log_client_error(e, remote_address, peer);
                         return;
                     }
                 }
-                Ok(None) => {}
-                Err(e) => {
-                    logger.log_client_error(e, remote_address, peer);
-                    return;
-                }
-            },
+            }
             Err(e) => {
                 logger.log_client_error(e.into(), remote_address, peer);
                 return;
