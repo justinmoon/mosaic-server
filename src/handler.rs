@@ -33,16 +33,8 @@ pub(crate) async fn handle_mosaic_message(
 
 fn handle_hello(message: Message, client_data: &mut ClientData) -> Result<Option<Message>, Error> {
     if client_data.mosaic_version.is_some() {
-        let prior_apps = client_data.applications.clone().unwrap_or_default();
-        client_data.closing_result = Some(ResultCode::Invalid);
-
-        let ack = Message::new_hello_ack(
-            HelloErrorCode::UnexpectedHello,
-            SUPPORTED_MAJOR_VERSION,
-            &prior_apps,
-        )?;
-
-        return Ok(Some(ack));
+        // Spec does not mandate a response to redundant HELLO; ignore to keep behavior minimal.
+        return Ok(None);
     }
 
     let client_version = match message.mosaic_major_version() {
@@ -153,17 +145,10 @@ mod tests {
             .await
             .unwrap();
 
-        let response = handle_mosaic_message(hello, &mut client)
-            .await
-            .unwrap()
-            .expect("response");
+        let response = handle_mosaic_message(hello, &mut client).await.unwrap();
 
-        assert_eq!(response.message_type(), MessageType::HelloAck);
-        assert_eq!(
-            response.hello_error_code(),
-            Some(HelloErrorCode::UnexpectedHello)
-        );
-        assert_eq!(client.closing_result, Some(ResultCode::Invalid));
+        assert!(response.is_none());
+        assert!(client.closing_result.is_none());
     }
 
     #[tokio::test]
